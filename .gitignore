@@ -1,0 +1,7 @@
+build/
+dist/
+third_party/raylib/
+third_party/raylib-install/
+third_party/raylib-install-win64/
+third_party/raylib-install-win32/
+third_party/raylib-install-mac/
