@@ -13,10 +13,10 @@
 #include <string.h>
 #include <time.h>
 
-// The canvas is a fixed 640x480; both dimensions are multiples of 16, so the
-// encoder needs no padding. Constant 60 fps playback.
-#define VID_W      640
-#define VID_H      480
+// Canvas dimensions (must be multiples of 16 for the H.264 encoder).
+// 992 = 30*32 + 32, 672 = 16*32 + 32 + 128 — both divide evenly.
+#define VID_W      992
+#define VID_H      672
 #define FPS        60
 #define TIMESCALE  90000
 #define FRAME_DUR  (TIMESCALE / FPS)   // 1500 ticks per frame
@@ -97,7 +97,7 @@ static void auto_name(char* out, size_t cap) {
     localtime_r(&t, &tmv);
 #endif
     char base[256];
-    strftime(base, sizeof base, "openblocks-%Y%m%d-%H%M%S", &tmv);
+    strftime(base, sizeof base, "opensweeper-%Y%m%d-%H%M%S", &tmv);
     // Timestamps are second-resolution, so disambiguate restarts within the
     // same second (and any pre-existing file) with a -N suffix.
     snprintf(out, cap, "%s.mp4", base);
