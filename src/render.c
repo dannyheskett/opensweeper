@@ -98,6 +98,11 @@ void render_cleanup(void) {
 bool render_window_should_close(void) { return WindowShouldClose(); }
 
 void render_toggle_fullscreen(void) {
+#ifdef PLATFORM_WEB
+    // raylib maps this to the browser Fullscreen API; the monitor-size dance
+    // below is desktop-specific (the browser sizes the canvas itself).
+    ToggleFullscreen();
+#else
     if (IsWindowFullscreen()) {
         ToggleFullscreen();
         SetWindowSize(CANVAS_W, CANVAS_H);
@@ -105,6 +110,7 @@ void render_toggle_fullscreen(void) {
         SetWindowSize(GetMonitorWidth(GetCurrentMonitor()), GetMonitorHeight(GetCurrentMonitor()));
         ToggleFullscreen();
     }
+#endif
 }
 
 bool render_cell_at(int mx, int my, const Game* g, int* cx, int* cy) {

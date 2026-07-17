@@ -107,6 +107,30 @@ $(OUT_MAC): $(MAC_OBJ)
 	$(MAC_CC) $(MAC_OBJ) -o $@ $(MAC_LDFLAGS)
 
 # ---------------------------------------------------------------------------
+# Web build (WebAssembly via Emscripten). CI-only: needs emcc (emsdk) on PATH.
+# Run scripts/build_raylib_web.sh first to produce the raylib web archive.
+# ---------------------------------------------------------------------------
+RAYLIB_WEB := third_party/raylib-install-web
+
+WEB_SRC     := $(filter-out src/encode_h264.c src/encode_mux.c,$(SRC))
+WEB_CFLAGS  := -std=c99 -Wall -Wextra -Isrc -DPLATFORM_WEB -Os \
+               -I$(RAYLIB_WEB)/include
+# Fixed memory (not ALLOW_MEMORY_GROWTH): a growable WASM heap yields resizable
+# ArrayBuffers, which modern browsers reject in WebGL texImage2D. 64 MiB is ample
+# for this game.
+WEB_LDFLAGS := -Os -sUSE_GLFW=3 -sINITIAL_MEMORY=67108864 \
+               --shell-file web/shell.html $(RAYLIB_WEB)/lib/libraylib.a
+
+WEB_OUT_DIR := build/web
+WEB_OUT     := $(WEB_OUT_DIR)/opensweeper.html
+
+web: $(WEB_OUT)
+
+$(WEB_OUT): $(WEB_SRC) $(wildcard src/*.h) web/shell.html | $(WEB_OUT_DIR)
+	emcc $(WEB_CFLAGS) $(WEB_SRC) -o $@ $(WEB_LDFLAGS)
+	@echo "[web] built $@"
+
+# ---------------------------------------------------------------------------
 # Unit tests (no Raylib)
 # ---------------------------------------------------------------------------
 TEST_BIN := build/test_game
@@ -150,8 +174,16 @@ dist-mac: $(OUT_MAC)
 	cp $(DOCS) $(STAGING)/mac/opensweeper-$(VERSION_SLUG)/
 	(cd $(STAGING)/mac && zip -qr ../../../$(DIST)/opensweeper-$(VERSION_SLUG)-macos-universal.zip opensweeper-$(VERSION_SLUG))
 
+# The web build ships as a zip of the HTML/JS/WASM (serve over http to play).
+dist-web: $(WEB_OUT)
+	@rm -rf $(STAGING)/web && mkdir -p $(STAGING)/web/opensweeper-$(VERSION_SLUG)-web $(DIST)
+	cp $(WEB_OUT_DIR)/opensweeper.html $(WEB_OUT_DIR)/opensweeper.js $(WEB_OUT_DIR)/opensweeper.wasm \
+	    $(STAGING)/web/opensweeper-$(VERSION_SLUG)-web/
+	cp $(DOCS) $(STAGING)/web/opensweeper-$(VERSION_SLUG)-web/
+	(cd $(STAGING)/web && zip -qr ../../../$(DIST)/opensweeper-$(VERSION_SLUG)-web-wasm.zip opensweeper-$(VERSION_SLUG)-web)
+
 # ---------------------------------------------------------------------------
-$(OBJ_DIR) $(REL_OBJ_DIR) $(WIN64_OBJ_DIR) $(WIN32_OBJ_DIR) $(MAC_OBJ_DIR):
+$(OBJ_DIR) $(REL_OBJ_DIR) $(WIN64_OBJ_DIR) $(WIN32_OBJ_DIR) $(MAC_OBJ_DIR) $(WEB_OUT_DIR):
 	mkdir -p $@
 
 clean:
@@ -159,4 +191,4 @@ clean:
 
 -include $(OBJ:.o=.d) $(REL_OBJ:.o=.d) $(WIN64_OBJ:.o=.d) $(WIN32_OBJ:.o=.d) $(MAC_OBJ:.o=.d)
 
-.PHONY: all run release run-release windows mac test dist dist-linux dist-windows dist-mac clean
+.PHONY: all run release run-release windows mac web test dist dist-linux dist-windows dist-mac dist-web clean
