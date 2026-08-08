@@ -13,7 +13,11 @@ SRC := src/main.c src/game.c src/input.c src/render.c src/sound.c \
 
 CFLAGS_COMMON := -std=c99 -Wall -Wextra -I$(MINIH264_INC) -I$(MINIMP4_INC) -Isrc
 
-OPENSWEEPER_VERSION ?= $(shell git tag --list 'release-*' 2>/dev/null | sed -n 's/^release-\([1-9][0-9]*\)$$/\1/p' | sort -n | tail -1 | grep . || echo 0)
+# RELEASE_VERSION is the project-neutral name the release workflow passes, so every
+# repo's release.yml is byte-identical. OPENSWEEPER_VERSION still works as an explicit
+# override (command-line vars beat ?=), and a bare `make dist` still derives from tags.
+RELEASE_VERSION ?= $(shell git tag --list 'release-*' 2>/dev/null | sed -n 's/^release-\([1-9][0-9]*\)$$/\1/p' | sort -n | tail -1 | grep . || echo 0)
+OPENSWEEPER_VERSION ?= $(RELEASE_VERSION)
 VERSION_SLUG        := build-$(OPENSWEEPER_VERSION)
 
 # ---------------------------------------------------------------------------
