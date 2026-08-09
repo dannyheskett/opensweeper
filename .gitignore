@@ -1,12 +1,30 @@
+# Build output
 build/
 dist/
+*.o
+*.a
+*.so
+*.exe
+*.obj
 
-# Gameplay recordings written by src/recorder.c into the repo root.
+# Vendored raylib, built from source by scripts/build_raylib_<platform>.sh
+third_party/raylib/
+third_party/raylib-install*/
+
+# Gameplay recordings written by src/recorder.c into the repo root
 *.mp4
 
-third_party/raylib/
-third_party/raylib-install/
-third_party/raylib-install-win64/
-third_party/raylib-install-win32/
-third_party/raylib-install-mac/
-third_party/raylib-install-web/
+# Local agent state. `.claude/*` rather than `.claude/` because git cannot
+# re-include a path whose parent directory is excluded, and committed skills
+# must stay tracked.
+.claude/*
+!.claude/skills/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
