@@ -74,3 +74,4 @@ Toggle **Record: On/Off** from the menu to capture your session to an H.264 MP4 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
