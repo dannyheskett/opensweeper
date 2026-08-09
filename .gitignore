@@ -1,5 +1,9 @@
 build/
 dist/
+
+# Gameplay recordings written by src/recorder.c into the repo root.
+*.mp4
+
 third_party/raylib/
 third_party/raylib-install/
 third_party/raylib-install-win64/
