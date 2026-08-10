@@ -1,30 +1,41 @@
 # ---------------------------------------------------------------------------
 # opensweeper build
+#
+# Per-object compilation with automatic header-dependency tracking (-MMD -MP).
+# Each target (linux dev/release, win64, win32) builds into its own object dir
+# so their differing flags never clash.
 # ---------------------------------------------------------------------------
 RAYLIB       := third_party/raylib-install
 RAYLIB_WIN64 := third_party/raylib-install-win64
 RAYLIB_WIN32 := third_party/raylib-install-win32
 
+# Single-header video pipeline: minih264 (encoder) + minimp4 (muxer). No -l
+# flag — both compile into their own dedicated translation units.
 MINIH264_INC := third_party/minih264
 MINIMP4_INC  := third_party/minimp4
 
 SRC := src/main.c src/game.c src/input.c src/render.c src/sound.c \
        src/recorder.c src/encode_h264.c src/encode_mux.c
 
+# Shared standard/warning flags and vendored-header include paths.
 CFLAGS_COMMON := -std=c99 -Wall -Wextra -I$(MINIH264_INC) -I$(MINIMP4_INC) -Isrc
 
+# Release version: a single integer. The release workflow passes
+# OPENSWEEPER_VERSION explicitly; for local `make dist` it derives from the
+# latest release-N tag (or 0 if there are none). Only used to name archives.
 # RELEASE_VERSION is the project-neutral name the release workflow passes, so every
 # repo's release.yml is byte-identical. OPENSWEEPER_VERSION still works as an explicit
 # override (command-line vars beat ?=), and a bare `make dist` still derives from tags.
 RELEASE_VERSION ?= $(shell git tag --list 'release-*' 2>/dev/null | sed -n 's/^release-\([1-9][0-9]*\)$$/\1/p' | sort -n | tail -1 | grep . || echo 0)
 OPENSWEEPER_VERSION ?= $(RELEASE_VERSION)
-VERSION_SLUG        := build-$(OPENSWEEPER_VERSION)
+VERSION_SLUG       := build-$(OPENSWEEPER_VERSION)
 
 # ---------------------------------------------------------------------------
-# Linux
+# Linux (dev + release, static linking)
 # ---------------------------------------------------------------------------
 CFLAGS   := $(CFLAGS_COMMON) -O2 -I$(RAYLIB)/include
 RELFLAGS := $(CFLAGS_COMMON) -O3 -I$(RAYLIB)/include
+# Static link raylib and its dependencies.
 LDFLAGS  := -L$(RAYLIB)/lib -Wl,-Bstatic -lraylib -Wl,-Bdynamic -lm -lpthread -ldl -lrt -lX11
 
 OBJ_DIR     := build/obj
@@ -58,7 +69,8 @@ run-release: $(OUT_RELEASE)
 	./$(OUT_RELEASE)
 
 # ---------------------------------------------------------------------------
-# Windows cross-compile
+# Windows cross-compile (x64 + x86, static, fully self-contained)
+# mingw-w64 predefines _WIN32, so no -D is needed.
 # ---------------------------------------------------------------------------
 WIN_CFLAGS  := $(CFLAGS_COMMON) -O2
 WIN_LDFLAGS := -Wl,-Bstatic -lraylib -lopengl32 -lgdi32 -lwinmm -lpthread -Wl,-Bdynamic -mwindows -static -static-libgcc
@@ -89,7 +101,9 @@ $(OUT_WIN32): $(WIN32_OBJ)
 	$(WIN32_CC) $(WIN32_OBJ) -o $@ -L$(RAYLIB_WIN32)/lib $(WIN_LDFLAGS)
 
 # ---------------------------------------------------------------------------
-# macOS universal
+# macOS build (universal arm64 + x86_64). CI-only: needs a macOS runner with an
+# Xcode toolchain. raylib links several system frameworks for windowing, input,
+# and OpenGL.
 # ---------------------------------------------------------------------------
 RAYLIB_MAC  := third_party/raylib-install-mac
 MAC_CC      := clang
@@ -135,7 +149,8 @@ $(WEB_OUT): $(WEB_SRC) $(wildcard src/*.h) web/shell.html | $(WEB_OUT_DIR)
 	@echo "[web] built $@"
 
 # ---------------------------------------------------------------------------
-# Unit tests (no Raylib)
+# Unit tests (game logic only — no raylib/window needed). Unlike the other game
+# repos the test TU does not include game.c; src/game.c is compiled alongside it.
 # ---------------------------------------------------------------------------
 TEST_BIN := build/test_game
 
@@ -146,7 +161,9 @@ $(TEST_BIN): tests/test_game.c src/game.c src/game.h | $(OBJ_DIR)
 	gcc $(CFLAGS_COMMON) -O0 -g tests/test_game.c src/game.c -o $(TEST_BIN)
 
 # ---------------------------------------------------------------------------
-# Distribution archives
+# Distribution archives. Each dist-<platform> stages the platform binary plus
+# README.md + LICENSE and packages it under dist/. Driven by the release
+# workflow; runnable locally for the platforms you can build.
 # ---------------------------------------------------------------------------
 DIST    := dist
 STAGING := build/staging
@@ -193,6 +210,7 @@ $(OBJ_DIR) $(REL_OBJ_DIR) $(WIN64_OBJ_DIR) $(WIN32_OBJ_DIR) $(MAC_OBJ_DIR) $(WEB
 clean:
 	rm -rf build dist
 
+# Pull in auto-generated header dependencies (ignored if not yet present).
 -include $(OBJ:.o=.d) $(REL_OBJ:.o=.d) $(WIN64_OBJ:.o=.d) $(WIN32_OBJ:.o=.d) $(MAC_OBJ:.o=.d)
 
 .PHONY: all run release run-release windows mac web test dist dist-linux dist-windows dist-mac dist-web clean
