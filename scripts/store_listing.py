@@ -97,8 +97,8 @@ def asc_listing():
 
 # Apple rejects a listing that names another platform or store. The rule is
 # recorded in the listing files themselves; this makes it fail a build rather
-# than a review. Checkers is a public-domain game with no trademarked name, so
-# nothing is banned on both stores.
+# than a review. Mine-sweeping is a public-domain game with no trademarked name
+# used in the listing, so nothing is banned on both stores.
 BANNED_EVERYWHERE = ()
 BANNED_ON_APPLE = ("android", "google play", "play store")
 
