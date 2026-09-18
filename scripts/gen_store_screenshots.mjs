@@ -248,12 +248,14 @@ async function capture(target, url, chrome) {
       for (let x = 0; x < w; x += 2)
         // A solid patch, not a stray pixel: the wordmark's antialiased edges
         // pass through the same grey.
-        if (x + 12 < w && y + 12 < h && near(at(x, y), CELL_HIDDEN, 4) &&
-            near(at(x + 12, y), CELL_HIDDEN, 4) && near(at(x, y + 12), CELL_HIDDEN, 4)) {
+        if (x + 12 < w && y + 12 < h &&
+            [[0, 0], [12, 0], [0, 12], [12, 12], [6, 6]].every(([dx, dy]) =>
+              near(at(x + dx, y + dy), CELL_HIDDEN, 1))) {
           if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
         }
     if (x1 < 0) throw new Error(`${target.name}: no board found`);
-    const g = { x0, y0, pitch: ((x1 - x0) + (y1 - y0)) / 2 / (GRID - 0.1) };
+    // x1 / y1 are the last patch origins; the patch reaches 12px further.
+    const g = { x0, y0, pitch: ((x1 + 13 - x0) + (y1 + 13 - y0)) / 2 / GRID };
     if (process.env.OS_DEBUG) console.log(`  grid: ${JSON.stringify({ x0, x1, y0, y1, pitch: g.pitch })}`);
     return g;
   }

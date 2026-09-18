@@ -29,7 +29,7 @@ cannot.
 ## Subtitle (<=30 chars)
 
 ```
-Clear the field, flag the mines
+Clear the field, flag mines
 ```
 
 ## Promotional text (<=170 chars)
