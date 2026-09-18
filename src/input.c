@@ -67,6 +67,7 @@ typedef struct {
     int     max_np;    // most simultaneous fingers seen during the sequence
     bool    moved;     // travelled past the tap slop: a swipe, not a tap
     bool    held;      // the long press already fired for this sequence
+    double  t_end;     // when the last sequence ended (s)
 } TouchState;
 
 static TouchState s_touch;
@@ -136,6 +137,7 @@ static void poll_touch(Input* in) {
             in->any_pressed = true;
         }
         s_touch.active = false;
+        s_touch.t_end = now;
     }
 
     // Swipes drive menu navigation: up / down move the highlight, left / right
@@ -156,6 +158,12 @@ static void poll_touch(Input* in) {
 }
 #endif // OS_TOUCH
 
+// Browsers follow a touch with emulated mouse events (a click for a tap, a
+// right-click for a long press), which would reveal or flag the cell a second
+// time. While a finger is down and for a moment after it lifts, the mouse is
+// the finger's echo, so its clicks are dropped.
+#define TOUCH_ECHO_S 0.8
+
 Input input_poll(void) {
     Input in = {0};
 #if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_IOS)
@@ -163,6 +171,10 @@ Input input_poll(void) {
 #endif
 #ifdef OS_TOUCH
     poll_touch(&in);            // Android + iOS + web (mobile browsers)
+    if (s_touch.active || (s_touch.t_end > 0.0 && GetTime() - s_touch.t_end < TOUCH_ECHO_S)) {
+        in.left_clicked = in.right_clicked = in.middle_clicked = false;
+        in.left_held = in.right_held = false;
+    }
 #endif
     return in;
 }
