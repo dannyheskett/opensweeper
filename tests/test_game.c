@@ -143,6 +143,74 @@ static void test_flag_cycling(void) {
 }
 
 // --------------------------------------------------------------------------
+// Chord: a number with all its mines flagged reveals the rest of its
+// neighbours; with a wrong flag it detonates the mine it left unflagged.
+// --------------------------------------------------------------------------
+static int find_number(const Game* g, int want_hidden_mine, int* ox, int* oy) {
+    for (int y = 1; y < g->rows - 1; y++)
+        for (int x = 1; x < g->cols - 1; x++) {
+            const Cell* c = &g->cells[y][x];
+            if (!c->revealed || c->mine || c->adj == 0) continue;
+            int hidden_safe = 0;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    const Cell* n = &g->cells[y + dy][x + dx];
+                    if (!n->revealed && !n->mine) hidden_safe++;
+                }
+            if (hidden_safe > 0 || !want_hidden_mine) { *ox = x; *oy = y; return 1; }
+        }
+    return 0;
+}
+
+static void test_chord(void) {
+    for (unsigned seed = 1; seed < 200; seed++) {
+        srand(seed);
+        Game* g = game_create(DIFF_INTERMEDIATE, false);
+        game_reveal(g, 8, 8);
+        int x, y;
+        if (g->phase != PHASE_PLAY || !find_number(g, 1, &x, &y)) { game_destroy(g); continue; }
+
+        // Flag exactly its mines, then chord: every neighbour is revealed and
+        // nothing blows up.
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+                if (g->cells[y + dy][x + dx].mine) game_flag(g, x + dx, y + dy);
+        game_frame_begin(g);
+        game_chord(g, x, y);
+        if (g->phase == PHASE_LOST) FAIL("chord", "a correct chord detonated a mine");
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) {
+                const Cell* n = &g->cells[y + dy][x + dx];
+                if (!n->mine && !n->revealed) FAIL("chord", "a safe neighbour stayed hidden");
+            }
+        game_destroy(g);
+        PASS("chord");
+        return;
+    }
+    FAIL("chord", "no seed produced a number to chord");
+}
+
+static void test_detonation(void) {
+    srand(11);
+    Game* g = game_create(DIFF_BEGINNER, false);
+    game_reveal(g, 4, 4);
+    for (int y = 0; y < g->rows; y++)
+        for (int x = 0; x < g->cols; x++)
+            if (g->cells[y][x].mine) {
+                game_frame_begin(g);
+                game_reveal(g, x, y);
+                if (g->phase != PHASE_LOST) FAIL("detonation", "revealing a mine did not lose");
+                if (!(g->events & EV_DETONATE)) FAIL("detonation", "EV_DETONATE not set");
+                if (g->detonated_x != x || g->detonated_y != y)
+                    FAIL("detonation", "the wrong mine is marked as detonated");
+                game_destroy(g);
+                PASS("detonation");
+                return;
+            }
+    FAIL("detonation", "no mine on the board");
+}
+
+// --------------------------------------------------------------------------
 int main(void) {
     srand((unsigned)time(NULL));
     test_mine_placement();
@@ -150,6 +218,8 @@ int main(void) {
     test_flood_fill();
     test_win_detection();
     test_flag_cycling();
+    test_chord();
+    test_detonation();
     printf("All tests passed.\n");
     return 0;
 }

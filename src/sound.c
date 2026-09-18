@@ -1,32 +1,27 @@
 #include "sound.h"
-#include <raylib.h>
-#include <math.h>
+#include "audio.h"
 #include <stdint.h>
 #include <stdlib.h>
 
+// Effects are short square-wave and noise clips synthesized at startup.
+// Playback goes through the audio.h backend (raylib on desktop/web/android,
+// AVAudioEngine on iOS); this file is backend-agnostic and does the synthesis.
+
 #define SAMPLE_RATE 44100
 
-static bool  audio_ready = false;
-static bool  enabled = false;
-static Sound effects[SFX_COUNT];
+static bool        enabled = false;
+static AudioHandle effects[SFX_COUNT];
 
-static Sound sound_from_samples(int16_t* samples, int count) {
-    Wave wave = {
-        .frameCount = (unsigned int)count,
-        .sampleRate = SAMPLE_RATE,
-        .sampleSize = 16,
-        .channels = 1,
-        .data = samples,
-    };
-    Sound s = LoadSoundFromWave(wave);
+static AudioHandle sound_from_samples(int16_t* samples, int count) {
+    AudioHandle h = audio_load(samples, count, SAMPLE_RATE);
     free(samples);
-    return s;
+    return h;
 }
 
-static Sound make_tone(float freq, float dur, float duty, float vol) {
+static AudioHandle make_tone(float freq, float dur, float duty, float vol) {
     int n = (int)(dur * SAMPLE_RATE);
     int16_t* buf = malloc(sizeof(int16_t) * n);
-    if (!buf) return (Sound){0};
+    if (!buf) return -1;
     for (int i = 0; i < n; i++) {
         float phase = freq * ((float)i / SAMPLE_RATE);
         phase -= (int)phase;
@@ -37,49 +32,18 @@ static Sound make_tone(float freq, float dur, float duty, float vol) {
     return sound_from_samples(buf, n);
 }
 
-static Sound make_sweep(float f0, float f1, float dur, float duty, float vol) __attribute__((unused));
-static Sound make_sweep(float f0, float f1, float dur, float duty, float vol) {
-    int n = (int)(dur * SAMPLE_RATE);
-    int16_t* buf = malloc(sizeof(int16_t) * n);
-    if (!buf) return (Sound){0};
-    float phase = 0.0f;
-    for (int i = 0; i < n; i++) {
-        float freq = f0 + (f1 - f0) * ((float)i / n);
-        phase += freq / SAMPLE_RATE;
-        float p = phase - (int)phase;
-        float env = 1.0f - (float)i / n;
-        float v = (p < duty ? 1.0f : -1.0f) * vol * env;
-        buf[i] = (int16_t)(v * 32767.0f);
-    }
-    return sound_from_samples(buf, n);
-}
-
-static Sound make_noise(float dur, float vol) __attribute__((unused));
-static Sound make_noise(float dur, float vol) {
-    int n = (int)(dur * SAMPLE_RATE);
-    int16_t* buf = malloc(sizeof(int16_t) * n);
-    if (!buf) return (Sound){0};
-    float hold = 0.0f;
-    for (int i = 0; i < n; i++) {
-        if (i % 8 == 0) hold = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
-        float env = 1.0f - (float)i / n;
-        buf[i] = (int16_t)(hold * vol * env * 32767.0f);
-    }
-    return sound_from_samples(buf, n);
-}
-
-static Sound make_mixed(float dur, float vol) {
+static AudioHandle make_mixed(float dur, float vol) {
     // Noise burst + descending sweep layered together (detonation effect)
     int n = (int)(dur * SAMPLE_RATE);
     int16_t* buf = malloc(sizeof(int16_t) * n);
-    if (!buf) return (Sound){0};
+    if (!buf) return -1;
     float phase = 0.0f, hold = 0.0f;
     for (int i = 0; i < n; i++) {
         float t = (float)i / n;
         float freq = 400.0f + (80.0f - 400.0f) * t;
         phase += freq / SAMPLE_RATE;
         float p = phase - (int)phase;
-        if (i % 8 == 0) hold = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
+        if (i % 8 == 0) hold = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
         float env = 1.0f - t;
         float sweep = (p < 0.5f ? 1.0f : -1.0f);
         float v = (sweep * 0.5f + hold * 0.5f) * vol * env;
@@ -88,11 +52,11 @@ static Sound make_mixed(float dur, float vol) {
     return sound_from_samples(buf, n);
 }
 
-static Sound make_arp(const float* freqs, int count, float per_note, float duty, float vol) {
+static AudioHandle make_arp(const float* freqs, int count, float per_note, float duty, float vol) {
     int note_n = (int)(per_note * SAMPLE_RATE);
     int n = note_n * count;
     int16_t* buf = malloc(sizeof(int16_t) * n);
-    if (!buf) return (Sound){0};
+    if (!buf) return -1;
     for (int j = 0; j < count; j++) {
         for (int i = 0; i < note_n; i++) {
             float phase = freqs[j] * ((float)i / SAMPLE_RATE);
@@ -106,9 +70,8 @@ static Sound make_arp(const float* freqs, int count, float per_note, float duty,
 }
 
 void sound_init(void) {
-    InitAudioDevice();
-    audio_ready = IsAudioDeviceReady();
-    if (!audio_ready) return;
+    audio_init();
+    if (!audio_ready()) return;
 
     static const float chord_arp[] = {440.0f, 660.0f, 880.0f};
     static const float win_arp[]   = {523.25f, 659.25f, 783.99f, 1046.50f}; // C E G C
@@ -125,15 +88,15 @@ void sound_init(void) {
 }
 
 void sound_shutdown(void) {
-    if (!audio_ready) return;
-    for (int i = 0; i < SFX_COUNT; i++) UnloadSound(effects[i]);
-    CloseAudioDevice();
+    if (!audio_ready()) return;
+    for (int i = 0; i < SFX_COUNT; i++) audio_unload(effects[i]);
+    audio_shutdown();
 }
 
 bool sound_is_enabled(void)  { return enabled; }
 void sound_toggle(void)      { enabled = !enabled; }
 
 void sound_play(SfxId id) {
-    if (!enabled || !audio_ready || id < 0 || id >= SFX_COUNT) return;
-    PlaySound(effects[id]);
+    if (!enabled || !audio_ready() || id < 0 || id >= SFX_COUNT) return;
+    audio_play(effects[id]);
 }

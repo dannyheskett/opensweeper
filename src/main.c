@@ -3,6 +3,7 @@
 #include "input.h"
 #include "sound.h"
 #include "recorder.h"
+#include "app.h"
 #include "tick.h"
 #include "menu.h"
 #include "window.h"
@@ -51,7 +52,7 @@ static void play_event_sounds(unsigned events) {
 // Fill labels[]/actions[] with the current menu. Returns the item count and
 // sets *gap_before to the index that should have a blank line above it -- Exit,
 // which is set apart from the rest -- or -1 when this build has no Exit item at
-// all (web, where the browser tab owns the lifecycle).
+// all (mobile and web, where the OS or the browser tab owns the lifecycle).
 static int build_menu(bool resumable, const char** labels, MenuAction* actions,
                       int* gap_before) {
     int n = 0;
@@ -60,10 +61,16 @@ static int build_menu(bool resumable, const char** labels, MenuAction* actions,
     labels[n] = "New Game";                                         actions[n++] = ACT_NEW;
     labels[n] = "Options";                                          actions[n++] = ACT_OPTIONS;
     labels[n] = sound_is_enabled() ? "Sound: On" : "Sound: Off";    actions[n++] = ACT_SOUND;
-#ifndef PLATFORM_WEB
-    // The mp4 recorder is a desktop-only feature (stubbed out on web), and a
-    // browser tab can't be closed from code, so neither appears there.
+#ifndef OS_TOUCH
+    // The mp4 recorder is a desktop-only feature (stubbed out on mobile/web), so
+    // the toggle would do nothing there -- omit it.
     labels[n] = recorder_active()  ? "Record: On" : "Record: Off";  actions[n++] = ACT_RECORD;
+#endif
+#if defined(PLATFORM_WEB)
+    // A browser tab can't be closed from code, so no Exit on web.
+#elif !defined(PLATFORM_IOS) && !defined(PLATFORM_ANDROID)
+    // Mobile apps don't self-terminate (the OS owns the lifecycle: home gesture /
+    // back button on Android, Apple guidelines on iOS), so no Exit on either.
     *gap_before = n;
     labels[n] = "Exit";                                             actions[n++] = ACT_EXIT;
 #endif
@@ -129,8 +136,9 @@ static void start_new_game(AppCtx* c) {
     c->state = STATE_PLAYING;
 }
 
-// A menu row picked by the pointer: a mouse click.
+// A menu row picked by the pointer: a completed tap, or a mouse click.
 static bool menu_pointer(const Input* in, Vector2* p) {
+    if (in->touch_tap) { *p = (Vector2){in->tap_x, in->tap_y}; return true; }
     if (in->left_clicked) {
         *p = (Vector2){(float)in->mouse_x, (float)in->mouse_y};
         return true;
@@ -171,11 +179,7 @@ static void frame_step(void* arg) {
         if (in.escape_pressed) {
             // Escape backs out: resume a game in progress, else quit (native).
             if (resumable) { c->state = STATE_PLAYING; break; }
-#ifndef PLATFORM_WEB
             c->quit = true; return;
-#else
-            break;
-#endif
         }
         if (in.menu_up) {
             c->selected = (c->selected + menu_count - 1) % menu_count;
@@ -249,37 +253,72 @@ static void frame_step(void* arg) {
         game_frame_begin(game);
         int ticks = sim_clock_advance(&c->clock, dt);
 
-        // Mouse input
+        // Mouse: left reveals, right flags, middle (or left+right) chords, and
+        // the face starts a new game.
         int cx, cy;
-        bool over_cell = render_cell_at(in.mouse_x, in.mouse_y, game, &cx, &cy);
-        bool over_face = render_face_hit(in.mouse_x, in.mouse_y);
-
-        if (over_face && in.left_clicked) {
+        bool over_cell = render_cell_at(game, in.mouse_x, in.mouse_y, &cx, &cy);
+        if (in.left_clicked && render_face_hit(game, in.mouse_x, in.mouse_y)) {
             start_new_game(c);
             break;
         }
-
         if (over_cell) {
-            game->cursor_x = cx;
-            game->cursor_y = cy;
+            // The pointer moves the keyboard cursor too, except on a touch
+            // screen, where there is no cursor to show.
+            if (!render_touch_ui()) {
+                game->cursor_x = cx;
+                game->cursor_y = cy;
+            }
             if (in.left_clicked) {
                 game_reveal(game, cx, cy);
             } else if (in.right_clicked) {
                 game_flag(game, cx, cy);
             } else if (in.middle_clicked) {
                 game_chord(game, cx, cy);
-            } else if (in.left_held && IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
-                // Left+right chord
+            } else if (in.left_held && in.right_held) {
                 game_chord(game, cx, cy);
             }
         }
 
-        // Keyboard cursor movement (DAS), counted in fixed 60 Hz steps
+        // Touch: a tap reveals a hidden cell or chords a revealed number; press
+        // and hold flags. A tap on the face starts a new game, and a tap
+        // anywhere else above the grid opens the menu.
+        if (in.touch_tap) {
+            int tx = (int)in.tap_x, ty = (int)in.tap_y;
+            if (render_face_hit(game, tx, ty)) {
+                start_new_game(c);
+                break;
+            }
+            if (render_cell_at(game, tx, ty, &cx, &cy)) {
+                game->cursor_x = cx;
+                game->cursor_y = cy;
+                if (game->cells[cy][cx].revealed) game_chord(game, cx, cy);
+                else                              game_reveal(game, cx, cy);
+            } else if (ty < render_board_top(game)) {
+                c->state = STATE_MENU;
+                c->selected = 0;
+                sound_play(SFX_MENU_SELECT);
+                break;
+            }
+        }
+        if (in.long_press && render_cell_at(game, (int)in.press_x, (int)in.press_y, &cx, &cy)) {
+            game->cursor_x = cx;
+            game->cursor_y = cy;
+            game_flag(game, cx, cy);
+        }
+
+        // Keyboard cursor movement (DAS), counted in fixed 60 Hz steps. The
+        // arrows follow the screen, so on a grid drawn sideways they move along
+        // the other game axis.
+        bool tr = render_transposed(game);
+        bool go_left  = tr ? in.move_up    : in.move_left;
+        bool go_right = tr ? in.move_down  : in.move_right;
+        bool go_up    = tr ? in.move_left  : in.move_up;
+        bool go_down  = tr ? in.move_right : in.move_down;
         for (int t = 0; t < ticks; t++) {
-            if (das_tick(&c->das_l, in.move_left)  && game->cursor_x > 0)            game->cursor_x--;
-            if (das_tick(&c->das_r, in.move_right) && game->cursor_x < game->cols-1) game->cursor_x++;
-            if (das_tick(&c->das_u, in.move_up)    && game->cursor_y > 0)            game->cursor_y--;
-            if (das_tick(&c->das_d, in.move_down)  && game->cursor_y < game->rows-1) game->cursor_y++;
+            if (das_tick(&c->das_l, go_left)  && game->cursor_x > 0)            game->cursor_x--;
+            if (das_tick(&c->das_r, go_right) && game->cursor_x < game->cols-1) game->cursor_x++;
+            if (das_tick(&c->das_u, go_up)    && game->cursor_y > 0)            game->cursor_y--;
+            if (das_tick(&c->das_d, go_down)  && game->cursor_y < game->rows-1) game->cursor_y++;
         }
 
         // Keyboard actions
@@ -318,9 +357,31 @@ static void frame_step(void* arg) {
     } else if (c->state == STATE_LOST) {
         render_lost(c->game);
     } else {
-        render_frame(c->game);
+        render_frame(c->game, in.left_held || in.touch_down);
     }
 }
+
+static void app_ctx_init(AppCtx* c) {
+    *c = (AppCtx){ .diff = DIFF_INTERMEDIATE, .marks = true };
+}
+
+#if defined(PLATFORM_IOS)
+
+// iOS: UIKit provides main() and the run loop, so the main() below is compiled
+// out. The app shell (ios/ios_main.mm) sets up the Metal layer, calls
+// app_init() once, then app_frame() from a CADisplayLink each frame.
+static AppCtx ios_ctx;
+
+void app_init(void) {
+    srand((unsigned int)time(NULL));
+    render_init();   // no-op on iOS (UIKit owns the window)
+    sound_init();
+    app_ctx_init(&ios_ctx);
+}
+
+void app_frame(void) { frame_step(&ios_ctx); }
+
+#else
 
 int main(int argc, char** argv) {
     srand((unsigned int)time(NULL));
@@ -340,8 +401,15 @@ int main(int argc, char** argv) {
 
     // Static so the pointer handed to emscripten stays valid after main()'s
     // stack is unwound on the web build (see the PLATFORM_WEB branch below).
-    // Everything not named here starts zeroed (MENU state, no game, DAS idle).
-    static AppCtx ctx = { .diff = DIFF_INTERMEDIATE, .marks = true };
+    static AppCtx ctx;
+    app_ctx_init(&ctx);
+
+#ifdef PLATFORM_WEB
+    // Describe taps or the mouse by the primary pointer: coarse (phone,
+    // tablet) -> taps; fine (desktop, 2-in-1 laptop) -> mouse and keyboard.
+    render_set_touch_ui(emscripten_run_script_int(
+        "(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 1 : 0"));
+#endif
 
 #ifdef PLATFORM_WEB
     // Browsers drive the loop via a per-frame callback; with the infinite-loop
@@ -362,3 +430,5 @@ int main(int argc, char** argv) {
 #endif
     return 0;
 }
+
+#endif // PLATFORM_IOS
