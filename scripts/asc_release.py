@@ -43,6 +43,7 @@ import base64
 import hashlib
 import json
 import os
+import plistlib
 import sys
 import time
 import urllib.error
@@ -57,13 +58,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from store_listing import ListingError, asc_listing  # noqa: E402
 
 BASE = "https://api.appstoreconnect.apple.com"
-BUNDLE_ID = "com.danheskett.opensweeper"
+REPO = Path(__file__).resolve().parent.parent
 LOCALE = "en-US"
 
-REPO = Path(__file__).resolve().parent.parent
-# One screenshot set per device family the app declares. opensweeper ships for
-# iPhone AND iPad (UIDeviceFamily [1,2] in ios/Info.plist), and Apple requires a
-# set for each: a version with no iPad screenshots cannot be submitted.
+# The app's identity and the device families it ships for come from its own
+# Info.plist, so this file is the same in every game repo.
+INFO_PLIST = plistlib.loads((REPO / "ios/Info.plist").read_bytes())
+BUNDLE_ID = INFO_PLIST["CFBundleIdentifier"]
+
+# One screenshot set per device family the app declares (UIDeviceFamily: 1 is
+# iPhone, 2 is iPad). Apple requires a set for each: an app that declares iPad
+# cannot be submitted without iPad screenshots.
 #
 # Apple's display-type enum is not named after the marketing sizes. There is no
 # APP_IPHONE_69: the enum tops out at APP_IPHONE_67, which is the slot that
@@ -71,10 +76,11 @@ REPO = Path(__file__).resolve().parent.parent
 # Sending a name Apple does not know earns a 409 ENTITY_ERROR.ATTRIBUTE.TYPE
 # that helpfully lists every valid value, which is how these two were picked.
 # One set per family covers every current device; Apple scales them down.
-SHOT_SETS = [
-    ("APP_IPHONE_67",        REPO / "ios/app-store-assets/screenshots/iphone-6.9"),
-    ("APP_IPAD_PRO_3GEN_129", REPO / "ios/app-store-assets/screenshots/ipad-13"),
-]
+FAMILY_SHOTS = {
+    1: ("APP_IPHONE_67",         REPO / "ios/app-store-assets/screenshots/iphone-6.9"),
+    2: ("APP_IPAD_PRO_3GEN_129", REPO / "ios/app-store-assets/screenshots/ipad-13"),
+}
+SHOT_SETS = [FAMILY_SHOTS[f] for f in INFO_PLIST.get("UIDeviceFamily", [1]) if f in FAMILY_SHOTS]
 
 # Apple requires "What's New" on every update. A commit subject is written for
 # other developers ("ios: submit each release to App Review automatically"), not
