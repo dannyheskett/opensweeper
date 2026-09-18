@@ -322,6 +322,80 @@ def upload_screenshots(asc, loc_id, shots, display_type):
         print(f"  screenshot {display_type} {path.name}")
 
 
+# The App Review contact fields. Apple refuses a submission whose version has
+# no copyright line or no review details, and it only carries them forward from
+# an earlier version -- an app's FIRST version has neither.
+REVIEW_CONTACT = ("contactFirstName", "contactLastName", "contactPhone", "contactEmail")
+
+
+def listing_field(heading):
+    """The fenced block under `## <heading>` in the App Store LISTING.md, or
+    the backticked value on a `- **<heading>:**` line."""
+    md = (REPO / "ios/app-store-assets/LISTING.md").read_text()
+    lines = md.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == f"## {heading}":
+            block = []
+            inside = False
+            for l in lines[i + 1:]:
+                if l.startswith("## "):
+                    break
+                if l.startswith("```"):
+                    if inside:
+                        return "\n".join(block).strip()
+                    inside = True
+                    continue
+                if inside:
+                    block.append(l)
+        if line.startswith(f"- **{heading}:**") and "`" in line:
+            return line.split("`")[1]
+    sys.exit(f"LISTING.md has no {heading!r}")
+
+
+def ensure_review_info(asc, app, version_id):
+    """Give the version a copyright line and App Review details if it lacks them.
+
+    Copyright and the review notes come from LISTING.md. The contact (name,
+    phone, email) is personal, so it is never written into the repo: it is
+    copied from another version that has one -- this app's earlier versions
+    first, then the team's other apps, which share the same reviewer contact.
+    """
+    if is_placeholder(version_id):
+        return
+    v = asc.call("GET", f"/v1/appStoreVersions/{version_id}")["data"]["attributes"]
+    if not v.get("copyright"):
+        copyright_line = listing_field("Copyright")
+        asc.call("PATCH", f"/v1/appStoreVersions/{version_id}",
+                 {"data": {"type": "appStoreVersions", "id": version_id,
+                           "attributes": {"copyright": copyright_line}}})
+        print(f"  copyright: {copyright_line}")
+
+    if asc.call("GET", f"/v1/appStoreVersions/{version_id}/appStoreReviewDetail").get("data"):
+        return
+    contact = None
+    apps = [app] + [a["id"] for a in asc.call("GET", "/v1/apps?limit=50").get("data", [])
+                    if a["id"] != app]
+    for a in apps:
+        for ver in asc.call("GET", f"/v1/apps/{a}/appStoreVersions?limit=10").get("data", []):
+            if ver["id"] == version_id:
+                continue
+            d = asc.call("GET", f"/v1/appStoreVersions/{ver['id']}/appStoreReviewDetail").get("data")
+            if d and all(d["attributes"].get(k) for k in REVIEW_CONTACT):
+                contact = {k: d["attributes"][k] for k in REVIEW_CONTACT}
+                break
+        if contact:
+            break
+    if not contact:
+        sys.exit("no App Review contact on any version of any app; set one in the "
+                 "console (App Review Information) once, and later releases copy it")
+    attrs = dict(contact, demoAccountRequired=False, notes=listing_field("App Review notes"))
+    asc.call("POST", "/v1/appStoreReviewDetails", {
+        "data": {"type": "appStoreReviewDetails", "attributes": attrs,
+                 "relationships": {"appStoreVersion": {
+                     "data": {"type": "appStoreVersions", "id": version_id}}}}})
+    print("  review details: contact copied, notes from LISTING.md")
+
+
 def cmd_release(asc, args):
     app = asc.app_id()
     version_string = f"1.0.{args.build}"
@@ -412,6 +486,8 @@ def cmd_release(asc, args):
     if not args.submit:
         print("  not submitting (pass --submit to send it to review)")
         return 0
+
+    ensure_review_info(asc, app, version_id)
 
     # Reuse an unsent draft if one exists. Creating the submission is the step
     # that succeeds even when the version is not reviewable, so every failed
