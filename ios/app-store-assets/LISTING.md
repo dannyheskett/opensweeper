@@ -76,6 +76,15 @@ FREE AND OPEN SOURCE
 opensweeper is open source. Read the code, report a bug, or build it yourself: https://github.com/dannyheskett/opensweeper
 ```
 
+## App Review notes
+
+Sent to Apple's reviewer with every submission that has none yet
+(`scripts/asc_release.py` sets them, with the team's review contact).
+
+```
+Thank you very much for reviewing my game. opensweeper is the classic mine-sweeping puzzle: tap a cell to reveal it, press and hold to place a flag, and tap a number to clear its neighbours. It needs no account, sign-in or network access. It runs on iPhone and iPad in either orientation; tapping the top of the screen opens the menu, where Options sets the difficulty.
+```
+
 ## App information
 
 - **Category (primary):** Games -> Puzzle
