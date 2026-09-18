@@ -29,10 +29,14 @@ Input input_poll(void) {
     in.fullscreen_toggle = alt && IsKeyPressed(KEY_ENTER);
     if (in.fullscreen_toggle) in.reveal_pressed = false;
 
-    // Menu navigation (up/down arrow or W/S)
-    in.menu_up   = IsKeyPressed(KEY_UP)   || IsKeyPressed(KEY_W);
-    in.menu_down = IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S);
-    in.select_pressed = IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE);
+    // Menu navigation: Up/Down (or W/S) move, Left/Right (or A/D) cycle an
+    // Options value, Enter (not Alt+Enter) or Space selects.
+    in.menu_up    = IsKeyPressed(KEY_UP)    || IsKeyPressed(KEY_W);
+    in.menu_down  = IsKeyPressed(KEY_DOWN)  || IsKeyPressed(KEY_S);
+    in.menu_left  = IsKeyPressed(KEY_LEFT)  || IsKeyPressed(KEY_A);
+    in.menu_right = IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D);
+    in.select_pressed = (IsKeyPressed(KEY_ENTER) && !in.fullscreen_toggle)
+                      || IsKeyPressed(KEY_SPACE);
 
     in.any_pressed = in.left_clicked || in.right_clicked || in.reveal_pressed
                   || in.flag_pressed || in.escape_pressed || in.menu_up

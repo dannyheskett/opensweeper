@@ -14,7 +14,10 @@ RAYLIB_WIN32 := third_party/raylib-install-win32
 MINIH264_INC := third_party/minih264
 MINIMP4_INC  := third_party/minimp4
 
-SRC := src/main.c src/game.c src/input.c src/render.c src/sound.c \
+SRC := src/main.c src/game.c src/tick.c src/input.c \
+       src/render.c src/gfx_raylib.c \
+       src/menu.c src/present.c src/window.c \
+       src/sound.c \
        src/recorder.c src/encode_h264.c src/encode_mux.c
 
 # Shared standard/warning flags and vendored-header include paths.
@@ -149,25 +152,34 @@ $(WEB_OUT): $(WEB_SRC) $(wildcard src/*.h) web/shell.html | $(WEB_OUT_DIR)
 	@echo "[web] built $@"
 
 # ---------------------------------------------------------------------------
-# Unit tests (game logic only — no raylib/window needed). Unlike the other game
-# repos the test TU does not include game.c; src/game.c is compiled alongside it.
+# Unit tests (no raylib/window needed).
+#   test_game  — game logic. Unlike the other game repos the test TU does not
+#                include game.c; src/game.c is compiled alongside it.
+#   test_menu  — the family menu (menu.c, identical in every game): it fits
+#                every view shape, keeps its size on rotation, grows with the
+#                window, and a pointer picks the row under it.
 # ---------------------------------------------------------------------------
-TEST_BIN := build/test_game
+TEST_BIN      := build/test_game
+TEST_MENU_BIN := build/test_menu
 
-test: $(TEST_BIN)
+test: $(TEST_BIN) $(TEST_MENU_BIN)
 	./$(TEST_BIN)
+	./$(TEST_MENU_BIN)
+
+$(TEST_MENU_BIN): tests/test_menu.c $(wildcard src/*.c src/*.h) | $(OBJ_DIR)
+	gcc $(CFLAGS_COMMON) -O0 -g tests/test_menu.c -o $(TEST_MENU_BIN) -lm
 
 $(TEST_BIN): tests/test_game.c src/game.c src/game.h | $(OBJ_DIR)
 	gcc $(CFLAGS_COMMON) -O0 -g tests/test_game.c src/game.c -o $(TEST_BIN)
 
 # ---------------------------------------------------------------------------
 # Distribution archives. Each dist-<platform> stages the platform binary plus
-# README.md + LICENSE and packages it under dist/. Driven by the release
+# README.md + LICENSE + NOTICE and packages it under dist/. Driven by the release
 # workflow; runnable locally for the platforms you can build.
 # ---------------------------------------------------------------------------
 DIST    := dist
 STAGING := build/staging
-DOCS    := README.md LICENSE
+DOCS    := README.md LICENSE NOTICE
 
 dist: dist-linux dist-windows dist-mac
 
