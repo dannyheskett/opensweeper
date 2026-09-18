@@ -3,6 +3,9 @@
 #include "input.h"
 #include "sound.h"
 #include "recorder.h"
+#include "tick.h"
+#include "menu.h"
+#include "window.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,21 +17,24 @@
 
 typedef enum {
     STATE_MENU,
+    STATE_OPTIONS,
     STATE_PLAYING,
     STATE_WON,
     STATE_LOST,
 } AppState;
 
 typedef enum {
+    ACT_RESUME,
     ACT_NEW,
-    ACT_DIFF,
-    ACT_MARKS,
+    ACT_OPTIONS,
     ACT_SOUND,
     ACT_RECORD,
     ACT_EXIT,
 } MenuAction;
 
-#define MAX_MENU_ITEMS 8
+// Upper bound on labels[]/actions[]: one slot per MenuAction. Each action
+// appears at most once, so build_menu can never overflow.
+#define MAX_MENU_ITEMS 6
 
 static const char* diff_names[3] = {"Beginner", "Intermediate", "Expert"};
 
@@ -42,25 +48,41 @@ static void play_event_sounds(unsigned events) {
     if (events & EV_QUESTION)  sound_play(SFX_FLAG);
 }
 
-// Builds the menu and reports where the visual gap goes (-1 for none), so
-// menu composition and layout stay decided in one place.
-static int build_menu(Difficulty diff, bool marks, const char** labels, MenuAction* actions,
+// Fill labels[]/actions[] with the current menu. Returns the item count and
+// sets *gap_before to the index that should have a blank line above it -- Exit,
+// which is set apart from the rest -- or -1 when this build has no Exit item at
+// all (web, where the browser tab owns the lifecycle).
+static int build_menu(bool resumable, const char** labels, MenuAction* actions,
                       int* gap_before) {
-    static char diff_label[32];
-    snprintf(diff_label, sizeof(diff_label), "Difficulty: %s", diff_names[diff]);
     int n = 0;
     *gap_before = -1;
-    labels[n] = "New Game";                              actions[n++] = ACT_NEW;
-    labels[n] = diff_label;                              actions[n++] = ACT_DIFF;
-    labels[n] = marks ? "Marks (?): On" : "Marks (?): Off"; actions[n++] = ACT_MARKS;
-    labels[n] = sound_is_enabled() ? "Sound: On" : "Sound: Off"; actions[n++] = ACT_SOUND;
+    if (resumable) { labels[n] = "Resume Game";                     actions[n++] = ACT_RESUME; }
+    labels[n] = "New Game";                                         actions[n++] = ACT_NEW;
+    labels[n] = "Options";                                          actions[n++] = ACT_OPTIONS;
+    labels[n] = sound_is_enabled() ? "Sound: On" : "Sound: Off";    actions[n++] = ACT_SOUND;
 #ifndef PLATFORM_WEB
-    // No mp4 recorder in the browser, and a tab can't exit itself.
-    labels[n] = recorder_active() ? "Record: On" : "Record: Off"; actions[n++] = ACT_RECORD;
+    // The mp4 recorder is a desktop-only feature (stubbed out on web), and a
+    // browser tab can't be closed from code, so neither appears there.
+    labels[n] = recorder_active()  ? "Record: On" : "Record: Off";  actions[n++] = ACT_RECORD;
     *gap_before = n;
-    labels[n] = "Exit";                                  actions[n++] = ACT_EXIT;
+    labels[n] = "Exit";                                             actions[n++] = ACT_EXIT;
 #endif
     return n;
+}
+
+// The Options screen: difficulty and question-mark marks, plus Back. Values
+// cycle with Left/Right, or by selecting the row; the last item returns to the
+// menu. A new difficulty applies from the next New Game.
+#define OPT_ITEMS 3
+enum { OPT_DIFF, OPT_MARKS, OPT_BACK };
+
+static int build_options(Difficulty diff, bool marks, const char** labels) {
+    static char buf[OPT_ITEMS][32];
+    snprintf(buf[OPT_DIFF], sizeof buf[0], "Difficulty: %s", diff_names[diff]);
+    snprintf(buf[OPT_MARKS], sizeof buf[0], "Marks (?): %s", marks ? "On" : "Off");
+    snprintf(buf[OPT_BACK], sizeof buf[0], "Back");
+    for (int i = 0; i < OPT_ITEMS; i++) labels[i] = buf[i];
+    return OPT_ITEMS;
 }
 
 // DAS for keyboard cursor movement
@@ -87,35 +109,33 @@ typedef struct {
     bool marks;
     bool quit;
     Das das_l, das_r, das_u, das_d;
-#ifdef PLATFORM_WEB
-    // Fixed-timestep accumulator: the browser paces frames with
-    // requestAnimationFrame (display refresh), but the timer and DAS count
-    // frames at an assumed 60 Hz.
-    double prev_time;
-    double acc;
-#endif
+    SimClock clock;    // fixed-timestep accumulator (only advanced while playing)
+    double prev_time;  // GetTime() at the previous frame; 0 before the first
 } AppCtx;
 
-// How many 60 Hz logic ticks this frame represents. Native runs at a fixed 60
-// fps (SetTargetFPS), so it's always exactly one; on web the rAF-paced loop
-// converts elapsed wall time into whole ticks. A long gap (hidden tab, load
-// hitch) counts as a pause rather than banked catch-up, but short slowdowns
-// are processed in full so the game timer stays honest on slow devices (a
-// tick is just counter updates — cheap).
-static int logic_ticks(AppCtx* c) {
-#ifdef PLATFORM_WEB
-    double now = GetTime();
-    double dt = (c->prev_time > 0.0) ? now - c->prev_time : 1.0 / 60.0;
-    c->prev_time = now;
-    if (dt > 0.25) dt = 0.25;
-    c->acc += dt;
-    int ticks = (int)(c->acc * 60.0);
-    c->acc -= ticks / 60.0;
-    return ticks;
-#else
-    (void)c;
-    return 1;
-#endif
+static void cycle_option(AppCtx* c, int item, int dir) {
+    if (item == OPT_DIFF) {
+        c->diff = (Difficulty)((c->diff + 3 + dir) % 3);
+    } else if (item == OPT_MARKS) {
+        c->marks = !c->marks;
+        if (c->game) c->game->marks_enabled = c->marks;
+    }
+}
+
+static void start_new_game(AppCtx* c) {
+    if (c->game) game_destroy(c->game);
+    c->game = game_create(c->diff, c->marks);
+    if (recorder_active()) { recorder_stop(); recorder_start(NULL); }
+    c->state = STATE_PLAYING;
+}
+
+// A menu row picked by the pointer: a mouse click.
+static bool menu_pointer(const Input* in, Vector2* p) {
+    if (in->left_clicked) {
+        *p = (Vector2){(float)in->mouse_x, (float)in->mouse_y};
+        return true;
+    }
+    return false;
 }
 
 // One iteration of the game loop. `arg` is an AppCtx* (void* to match the
@@ -123,21 +143,40 @@ static int logic_ticks(AppCtx* c) {
 static void frame_step(void* arg) {
     AppCtx* c = (AppCtx*)arg;
 
-    int ticks = logic_ticks(c);
-    Input in = input_poll();
-    if (in.fullscreen_toggle) render_toggle_fullscreen();
+    // Real seconds since the previous frame, feeding the fixed-timestep
+    // accumulator so the timer and DAS count 60 Hz frames on any display
+    // refresh. The first frame (prev_time == 0) is treated as exactly one step.
+    double now = GetTime();
+    double dt = (c->prev_time > 0.0) ? now - c->prev_time : SIM_DT;
+    c->prev_time = now;
+    if (c->state != STATE_PLAYING) sim_clock_reset(&c->clock);
 
+    // Sampled every frame, not only while playing, so a stale "was focused"
+    // cannot survive a menu visit and fire on the first frame of the next game.
+    bool focus_lost = window_focus_lost();
+
+    Input in = input_poll();
+    if (in.fullscreen_toggle) window_toggle_fullscreen();
+
+    bool resumable = (c->game != NULL && c->game->phase != PHASE_WON
+                      && c->game->phase != PHASE_LOST);
     const char* labels[MAX_MENU_ITEMS];
     MenuAction actions[MAX_MENU_ITEMS];
-    int gap_before;
-    int menu_count = build_menu(c->diff, c->marks, labels, actions, &gap_before);
-    if (c->selected >= menu_count) c->selected = 0;
+    int gap_before = -1;
+    int menu_count = build_menu(resumable, labels, actions, &gap_before);
 
     switch (c->state) {
-    case STATE_MENU:
+    case STATE_MENU: {
+        if (c->selected >= menu_count) c->selected = 0;
+        if (in.escape_pressed) {
+            // Escape backs out: resume a game in progress, else quit (native).
+            if (resumable) { c->state = STATE_PLAYING; break; }
 #ifndef PLATFORM_WEB
-        if (in.escape_pressed) { c->quit = true; return; }
+            c->quit = true; return;
+#else
+            break;
 #endif
+        }
         if (in.menu_up) {
             c->selected = (c->selected + menu_count - 1) % menu_count;
             sound_play(SFX_MENU_MOVE);
@@ -146,42 +185,69 @@ static void frame_step(void* arg) {
             c->selected = (c->selected + 1) % menu_count;
             sound_play(SFX_MENU_MOVE);
         }
-        if (in.select_pressed) {
+        // A click on a row chooses it; a keyboard select activates the
+        // highlighted row.
+        bool do_select = in.select_pressed;
+        Vector2 p;
+        if (menu_pointer(&in, &p)) {
+            int hit = menu_hit_test(p);
+            if (hit >= 0 && hit < menu_count) { c->selected = hit; do_select = true; }
+        }
+        if (do_select) {
             sound_play(SFX_MENU_SELECT);
             switch (actions[c->selected]) {
-            case ACT_NEW:
-                if (c->game) game_destroy(c->game);
-                c->game = game_create(c->diff, c->marks);
-                if (recorder_active()) { recorder_stop(); recorder_start(NULL); }
-                c->state = STATE_PLAYING;
-                break;
-            case ACT_DIFF:
-                c->diff = (Difficulty)((c->diff + 1) % 3);
-                break;
-            case ACT_MARKS:
-                c->marks = !c->marks;
-                if (c->game) c->game->marks_enabled = c->marks;
-                break;
-            case ACT_SOUND:
-                sound_toggle();
-                sound_play(SFX_MENU_SELECT);
-                break;
-            case ACT_RECORD:
-                recorder_toggle();
-                break;
-            case ACT_EXIT:
-                c->quit = true;
-                return;
+            case ACT_RESUME:  c->state = STATE_PLAYING; break;
+            case ACT_NEW:     start_new_game(c); break;
+            case ACT_OPTIONS: c->state = STATE_OPTIONS; c->selected = 0; break;
+            case ACT_SOUND:   sound_toggle(); sound_play(SFX_MENU_SELECT); break;
+            case ACT_RECORD:  recorder_toggle(); break;
+            case ACT_EXIT:    c->quit = true; return;
             }
         }
         break;
+    }
+
+    case STATE_OPTIONS: {
+        const char* opt_labels[OPT_ITEMS];
+        int opt_count = build_options(c->diff, c->marks, opt_labels);
+        if (c->selected >= opt_count) c->selected = 0;
+        if (in.escape_pressed) { c->state = STATE_MENU; c->selected = 0; break; }
+        if (in.menu_up) {
+            c->selected = (c->selected + opt_count - 1) % opt_count;
+            sound_play(SFX_MENU_MOVE);
+        }
+        if (in.menu_down) {
+            c->selected = (c->selected + 1) % opt_count;
+            sound_play(SFX_MENU_MOVE);
+        }
+        int dir = (in.menu_right ? 1 : 0) - (in.menu_left ? 1 : 0);
+        bool do_select = in.select_pressed;
+        Vector2 p;
+        if (menu_pointer(&in, &p)) {
+            int hit = menu_hit_test(p);
+            if (hit >= 0 && hit < opt_count) { c->selected = hit; do_select = true; }
+        }
+        if (do_select && c->selected == OPT_BACK) {
+            c->state = STATE_MENU;
+            c->selected = 0;
+            sound_play(SFX_MENU_SELECT);
+        } else if (dir != 0 || do_select) {
+            cycle_option(c, c->selected, dir ? dir : 1);
+            sound_play(SFX_MENU_SELECT);
+        }
+        break;
+    }
 
     case STATE_PLAYING: {
-        if (!c->game) break;
+        if (!c->game) { c->state = STATE_MENU; break; }
+        // Losing focus (tab hidden, window deactivated) returns to the menu;
+        // the game stays resumable.
+        if (focus_lost) { c->state = STATE_MENU; c->selected = 0; break; }
         if (in.escape_pressed) { c->state = STATE_MENU; c->selected = 0; break; }
 
         Game* game = c->game;
         game_frame_begin(game);
+        int ticks = sim_clock_advance(&c->clock, dt);
 
         // Mouse input
         int cx, cy;
@@ -189,9 +255,7 @@ static void frame_step(void* arg) {
         bool over_face = render_face_hit(in.mouse_x, in.mouse_y);
 
         if (over_face && in.left_clicked) {
-            game_destroy(game);
-            c->game = game_create(c->diff, c->marks);
-            if (recorder_active()) { recorder_stop(); recorder_start(NULL); }
+            start_new_game(c);
             break;
         }
 
@@ -210,7 +274,7 @@ static void frame_step(void* arg) {
             }
         }
 
-        // Keyboard cursor movement (DAS) — frame-counted at 60 Hz
+        // Keyboard cursor movement (DAS), counted in fixed 60 Hz steps
         for (int t = 0; t < ticks; t++) {
             if (das_tick(&c->das_l, in.move_left)  && game->cursor_x > 0)            game->cursor_x--;
             if (das_tick(&c->das_r, in.move_right) && game->cursor_x < game->cols-1) game->cursor_x++;
@@ -240,12 +304,15 @@ static void frame_step(void* arg) {
             c->selected = 0;
         }
         break;
-
     }
 
     // Render
     if (c->state == STATE_MENU) {
         render_menu("OPENSWEEPER", labels, menu_count, c->selected, gap_before);
+    } else if (c->state == STATE_OPTIONS) {
+        const char* opt_labels[OPT_ITEMS];
+        int opt_count = build_options(c->diff, c->marks, opt_labels);
+        render_menu("OPTIONS", opt_labels, opt_count, c->selected, OPT_BACK);
     } else if (c->state == STATE_WON) {
         render_won(c->game);
     } else if (c->state == STATE_LOST) {
@@ -282,10 +349,10 @@ int main(int argc, char** argv) {
     // web (the browser tab owns the lifetime). fps=0 paces with
     // requestAnimationFrame — rendering the preserveDrawingBuffer canvas
     // outside rAF forces compositor readbacks (GPU stalls, eventual context
-    // loss); logic_ticks() keeps game speed at 60 Hz on any refresh rate.
+    // loss); the fixed-timestep clock keeps game speed at 60 Hz on any refresh.
     emscripten_set_main_loop_arg(frame_step, &ctx, 0, 1);
 #else
-    while (!render_window_should_close() && !ctx.quit) {
+    while (!window_should_close() && !ctx.quit) {
         frame_step(&ctx);
     }
     recorder_stop();

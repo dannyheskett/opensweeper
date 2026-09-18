@@ -22,7 +22,8 @@ typedef struct {
 
     // Menu navigation
     bool menu_up, menu_down;
-    bool select_pressed;    // Enter or Space in menu
+    bool menu_left, menu_right; // cycle a value on the Options screen
+    bool select_pressed;    // Enter (not Alt+Enter) or Space in menu
     bool any_pressed;
 } Input;
 
