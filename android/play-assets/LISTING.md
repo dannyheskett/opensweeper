@@ -14,10 +14,10 @@ icon and feature graphic with `scripts/gen_icons.py`.
 |------|-----------|------|
 | `icon-512.png` | App icon | 512×512 PNG (32-bit) |
 | `feature-graphic-1024x500.png` | Feature graphic | 1024×500 PNG/JPG |
-| `screenshots/phone/` | Phone screenshots | 4× 1080×1920 PNG |
-| `screenshots/phone-landscape/` | Phone screenshots (sideways) | 4× 1920×1080 PNG |
-| `screenshots/tablet/` | 7-inch and 10-inch tablet screenshots | 4× 1600×2560 PNG |
-| `screenshots/tablet-landscape/` | Tablet screenshots (sideways) | 4× 2560×1600 PNG |
+| `screenshots/phone/` | Phone screenshots | 3× 1080×1920 PNG |
+| `screenshots/phone-landscape/` | Phone screenshots (sideways) | 3× 1920×1080 PNG |
+| `screenshots/tablet/` | 7-inch and 10-inch tablet screenshots | 3× 1600×2560 PNG |
+| `screenshots/tablet-landscape/` | Tablet screenshots (sideways) | 3× 2560×1600 PNG |
 
 The game plays in both orientations, so each slot has an upright and a sideways
 set. Upload one orientation per slot, not a mixture.

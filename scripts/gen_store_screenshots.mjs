@@ -48,7 +48,8 @@ const TARGETS = [
 ];
 
 // The board the shots are taken on: Beginner (9x9, 10 mines) fills a phone and
-// reads at a glance in a store thumbnail, and the player below can win it.
+// reads at a glance in a store thumbnail. Three frames per target: the menu,
+// the fresh board, and a game in progress with flags placed.
 const MAX_GAMES = 40;        // restarts after a lost guess before giving up
 const MAX_MOVES = 200;       // per game, a safety stop
 
@@ -61,6 +62,7 @@ const NUM_COLORS = [null,
   [100, 120, 240], [60, 180, 60], [220, 60, 60], [60, 60, 180],
   [160, 40, 40], [60, 180, 180], [220, 220, 220], [140, 140, 140]];
 const GRID = 9;              // Beginner
+const NOTICE_TITLE = [253, 249, 0];   // raylib YELLOW: the end-of-game notice's title
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm',
                '.data': 'application/octet-stream', '.png': 'image/png' };
@@ -199,7 +201,9 @@ async function capture(target, url, chrome) {
   // press and then a release, so the tap is silently dropped and the board
   // never finishes.
   const slow = w * h > 3000000;
-  const T = { settle: slow ? 220 : 80, hold: slow ? 500 : 250, after: slow ? 900 : 500 };
+  // A tap must stay under the game's 0.4 s press-and-hold threshold
+  // (src/input.c LONG_PRESS_S) at every size, or it flags instead of revealing.
+  const T = { settle: slow ? 220 : 80, hold: 250, after: slow ? 900 : 500 };
   // Real touch events (the Chrome DevTools protocol), not a mouse: the game
   // reads taps and press-and-hold from its touch recognizer, exactly as on a
   // phone.
@@ -297,6 +301,19 @@ async function capture(target, url, chrome) {
     return cells;
   }
 
+  // The end-of-game notice is up: its title is the only pure raylib-yellow text
+  // on screen (flags are a warmer yellow). It dims the board under it, so the
+  // cells can no longer be read once it shows.
+  async function noticeShowing() {
+    const img = decodePng(await page.screenshot());
+    for (let y = Math.round(h * 0.35); y < h * 0.65; y += 3)
+      for (let x = Math.round(w * 0.2); x < w * 0.8; x += 3) {
+        const i = (y * img.w + x) * 3;
+        if (near([img.rgb[i], img.rgb[i + 1], img.rgb[i + 2]], NOTICE_TITLE, 20)) return true;
+      }
+    return false;
+  }
+
   const centre = (g, r, c) => [g.x0 + (c + 0.5) * g.pitch, g.y0 + (r + 0.5) * g.pitch];
   const neighbours = (r, c) => {
     const out = [];
@@ -307,44 +324,67 @@ async function capture(target, url, chrome) {
     return out;
   };
 
-  // Play one game with the two basic deductions, guessing only when stuck.
-  // Returns 'won' or 'lost'. Takes the mid-game shot on the way.
+  // Play one game: the two single-number deductions, then the subset rule
+  // between two numbers, and a guess only when nothing is certain -- at the
+  // hidden cell least likely to be a mine. Returns 'mid' once the mid-game
+  // shot is taken, or 'over' if the game ends first.
   let midDone = false;   // the mid-game shot, taken once in whichever game gets there
   async function playOne(g) {
     await tap(...centre(g, 4, 4));             // the first reveal is always safe
     for (let move = 0; move < MAX_MOVES; move++) {
+      if (await noticeShowing()) return 'over';
       const cells = await readCells(g);
-      if (cells.some(row => row.includes('m'))) return 'lost';
       const hidden = [], flags = [];
       cells.forEach((row, r) => row.forEach((v, c) => { if (v === 'h') hidden.push([r, c]); if (v === 'f') flags.push([r, c]); }));
-      if (hidden.length + flags.length === 10) return 'won';
 
-      let acted = false;
-      for (let r = 0; r < GRID && !acted; r++)
-        for (let c = 0; c < GRID && !acted; c++) {
+      // Every number's constraint: its hidden neighbours hold `need` mines.
+      const cons = [];
+      for (let r = 0; r < GRID; r++)
+        for (let c = 0; c < GRID; c++) {
           const n = cells[r][c];
           if (typeof n !== 'number' || n === 0) continue;
           const nb = neighbours(r, c);
           const h = nb.filter(([rr, cc]) => cells[rr][cc] === 'h');
-          const f = nb.filter(([rr, cc]) => cells[rr][cc] === 'f');
-          if (!h.length) continue;
-          if (f.length === n) {                // all its mines flagged: chord
-            await tap(...centre(g, r, c));
-            acted = true;
-          } else if (f.length + h.length === n) {   // every hidden one is a mine
-            for (const [rr, cc] of h) await hold(...centre(g, rr, cc));
-            acted = true;
-          }
+          const f = nb.filter(([rr, cc]) => cells[rr][cc] === 'f').length;
+          if (h.length) cons.push({ r, c, need: n - f, h, key: new Set(h.map(([a, b]) => a * GRID + b)) });
         }
-      if (!acted) {
-        if (!hidden.length) {
-          if (process.env.OS_DEBUG) console.log(cells.map(r => r.join('')).join('\n'));
-          return 'stuck';
+
+      let acted = false;
+      for (const k of cons) {
+        if (k.need === 0) { await tap(...centre(g, k.r, k.c)); acted = true; break; }      // chord
+        if (k.need === k.h.length) {                                                    // all mines
+          for (const [rr, cc] of k.h) await hold(...centre(g, rr, cc));
+          acted = true; break;
         }
-        const [r, c] = hidden[Math.floor(Math.random() * hidden.length)];
-        await tap(...centre(g, r, c));
       }
-      if (!midDone && flags.length >= 2 && hidden.length < 60) { await shot('03-play'); midDone = true; }
+      // Subset rule: if A's hidden cells are all among B's, the cells only B
+      // sees hold exactly need(B) - need(A) mines -- none, or all of them.
+      for (let i = 0; i < cons.length && !acted; i++)
+        for (let j = 0; j < cons.length && !acted; j++) {
+          const A = cons[i], B = cons[j];
+          if (i === j || A.h.length >= B.h.length) continue;
+          if (![...A.key].every(x => B.key.has(x))) continue;
+          const rest = B.h.filter(([a, b]) => !A.key.has(a * GRID + b));
+          const m = B.need - A.need;
+          if (m === 0) { await tap(...centre(g, ...rest[0])); acted = true; }
+          else if (m === rest.length) { for (const [a, b] of rest) await hold(...centre(g, a, b)); acted = true; }
+        }
+
+      if (!acted) {
+        if (!hidden.length) return 'stuck';
+        // Least likely mine: the worst local ratio from any number touching the
+        // cell, or the board's leftover density for a cell no number touches.
+        const left = Math.max(0, 10 - flags.length);
+        const density = left / hidden.length;
+        let best = hidden[0], bestP = 2;
+        for (const [r, c] of hidden) {
+          let p = density;
+          for (const k of cons) if (k.key.has(r * GRID + c)) p = Math.max(p, k.need / k.h.length);
+          if (p < bestP) { bestP = p; best = [r, c]; }
+        }
+        await tap(...centre(g, ...best));
+      }
+      if (flags.length >= 2 && hidden.length < 60) { await shot('03-play'); midDone = true; return 'mid'; }
     }
     return 'stuck';
   }
@@ -368,22 +408,20 @@ async function capture(target, url, chrome) {
   await shot('02-board');
   const g = await readGrid();
 
-  for (let game = 0; ; game++) {
-    if (game === MAX_GAMES) throw new Error(`${target.name}: no win in ${MAX_GAMES} games`);
+  // 3. A game in progress, with flags placed. A game that ends before it gets
+  //    there (a lost guess) is dismissed and started again.
+  for (let game = 0; !midDone; game++) {
+    if (game === MAX_GAMES) throw new Error(`${target.name}: no mid-game frame in ${MAX_GAMES} games`);
     const result = await playOne(g);
-    if (result === 'won') break;
-    // Lost a guess: dismiss the notice, start again from the menu.
+    if (result === 'mid') break;
     await wait(600);
-    await tap(w / 2, h / 2);
-    await key('Enter');
+    await tap(w / 2, h / 2);       // dismiss the notice -> menu
+    await key('Enter');            // New Game
     await wait(600);
   }
-  await wait(600);
-  // 4. The cleared board with the "YOU WIN" notice.
-  await shot('04-complete');
 
   await browser.close();
-  console.log(`${target.name}: 4 frames -> ${out}`);
+  console.log(`${target.name}: 3 frames -> ${out}`);
 }
 
 const src = arg('--src');
