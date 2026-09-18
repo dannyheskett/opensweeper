@@ -1,5 +1,5 @@
-#ifndef OPENSWEEPER_OS_TYPES_H
-#define OPENSWEEPER_OS_TYPES_H
+#ifndef OS_TYPES_H_INCLUDED
+#define OS_TYPES_H_INCLUDED
 
 // Geometry / colour types and the handful of raylib query functions the shared
 // game code uses, decoupled from raylib so the iOS build (which links no raylib)
@@ -71,4 +71,4 @@ bool    WindowShouldClose(void);
 
 #endif // PLATFORM_IOS
 
-#endif // OPENSWEEPER_OS_TYPES_H
+#endif // OS_TYPES_H_INCLUDED
