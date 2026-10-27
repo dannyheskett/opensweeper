@@ -132,8 +132,7 @@ make ios       # -> build/opensweeper.ipa           (device arm64, unsigned)
 ```
 
 iPhone and iPad, both orientations, iOS 15+. The `.ipa` is unsigned unless
-`IOS_SIGN_IDENTITY` / `IOS_PROFILE` / `IOS_TEAM_ID` are set; AWS Device Farm
-re-signs an unsigned one on upload.
+`IOS_SIGN_IDENTITY` / `IOS_PROFILE` / `IOS_TEAM_ID` are set.
 
 ### Web (needs Emscripten)
 
